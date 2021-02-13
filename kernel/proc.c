@@ -252,6 +252,16 @@ growproc(int n)
   p->sz = sz;
   return 0;
 }
+uint64 
+nproc(void) {
+    struct proc* p; uint64 n = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->state != UNUSED) n++;
+        release(&p->lock);
+    }
+    return n;
+}
 
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
@@ -274,6 +284,8 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  
+  np->mask = p->mask;
 
   np->parent = p;
 
