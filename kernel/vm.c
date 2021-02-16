@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -15,12 +17,71 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+// proc's version of kvminit
+pagetable_t
+kvmcreate() 
+{
+    pagetable_t kpagetable = (pagetable_t) kalloc();
+    memset(kpagetable, 0, PGSIZE);
+
+    if (mappages(kpagetable, UART0, PGSIZE, UART0, PTE_R | PTE_W) != 0) return 0;
+    if (mappages(kpagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) != 0) return 0;
+    //if (mappages(kpagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W) != 0) return 0;
+    if (mappages(kpagetable, PLIC, 0x400000, PLIC, PTE_R | PTE_W) != 0) return 0;
+    if (mappages(kpagetable, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X) != 0) return 0;
+    if (mappages(kpagetable, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W) != 0) return 0;
+    if (mappages(kpagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) != 0) return 0;
+
+    return kpagetable;
+}
+
+/*
+void 
+kvmfree(pagetable_t kpagetale) 
+{
+  for (int j =0 ; j <512; j++)
+  {
+  pte_t pte_1 = kpagetale[j];
+  if (pte_1 & PTE_V) {
+  pagetable_t level1 = (pagetable_t) PTE2PA(pte_1);
+  for (int i = 0; i < 512; i++) {
+    pte_t pte_2 = level1[i];
+    if (pte_2 & PTE_V) {
+      uint64 level2 = PTE2PA(pte_2);
+      kfree((void *) level2);
+      level1[i] = 0;
+    }
+  }
+  kfree((void *) level1);
+  kpagetale[j]=0;
+  }
+  }
+  kfree((void *) kpagetale);
+}
+*/
+
+
+void 
+kvmfree(pagetable_t pagetable) {
+    for(int i = 0; i < 512; i++){
+        pte_t pte = pagetable[i];
+        if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+            uint64 child = PTE2PA(pte);
+            kvmfree((pagetable_t)child);
+            pagetable[i] = 0;
+        }
+    }
+    kfree((void*)pagetable);
+}
+
+
+
 void printwalk(pagetable_t pt, int dep) {
     for(int i = 0; i < 512; i++){
         pte_t pte = pt[i];
         if (pte & PTE_V) {
             for (int j = 0; j < dep - 1; j++) printf(".. ");
-            printf("..%d: pte %p ", i, pte);
+            printf("..%d: pte %p R:%d W:%d X:%d", i, pte,pte&PTE_R,pte&PTE_W,pte&PTE_X);
             uint64 child = PTE2PA(pte);
             printf("pa %p\n", child);
             if ((pte & (PTE_R|PTE_W|PTE_X)) == 0)
@@ -75,6 +136,8 @@ kvminithart()
   sfence_vma();
 }
 
+
+
 // Return the address of the PTE in page table pagetable
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page-table pages.
@@ -87,6 +150,7 @@ kvminithart()
 //   21..29 -- 9 bits of level-1 index.
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
+
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
@@ -106,6 +170,25 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   }
   return &pagetable[PX(0, va)];
 }
+
+uint64
+walkaddrk(uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(kernel_pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  pa = PTE2PA(*pte);
+  return pa;
+}
+
 
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
@@ -151,7 +234,7 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(myproc()->kpagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -392,9 +475,23 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   return 0;
 }
 
+int
+copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+{
+return copyin_new(pagetable,dst,srcva,len);
+}
+
+int
+copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+{
+return copyinstr_new(pagetable,dst,srcva,max);
+}
+
+/*
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
+
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
@@ -416,6 +513,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   }
   return 0;
 }
+
 
 // Copy a null-terminated string from user to kernel.
 // Copy bytes to dst from virtual address srcva in a given page table,
@@ -459,3 +557,4 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+*/

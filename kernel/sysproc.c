@@ -47,8 +47,30 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
+  
+  if(addr+n >=PLIC)
+    return -1;
   if(growproc(n) < 0)
     return -1;
+  
+  pte_t *pte,*kernelPte;
+  struct proc *p = myproc();
+  if ( n > 0 ){
+  for (int j = addr;j < addr+n ; j += PGSIZE)
+  {
+  pte=walk(p->pagetable,j,0);
+  kernelPte = walk(p->kpagetable,j,1);
+  *kernelPte = (*pte) & ~PTE_U; 
+  }
+  }
+  else{
+  for (int j = addr -PGSIZE;j>=addr+n;j-=PGSIZE)
+  {
+  	uvmunmap(p->kpagetable,j,1,0);
+  }
+  }
+  
+  
   return addr;
 }
 

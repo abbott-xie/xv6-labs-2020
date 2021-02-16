@@ -37,9 +37,14 @@ procinit(void)
       char *pa = kalloc();
       if(pa == 0)
         panic("kalloc");
+      
+      p->kstackpa = (uint64)pa;
       uint64 va = KSTACK((int) (p - proc));
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
+      //printf("kstackpa%d\n",p->kstackpa);
+      //printf("kstack%d\n",p->kstack);
+      
   }
   kvminithart();
 }
@@ -120,6 +125,26 @@ found:
     release(&p->lock);
     return 0;
   }
+  
+  p->kpagetable = kvmcreate();
+  
+  //mappages(p->kpagetable, (uint64)p->kstack, PGSIZE,(uint64)p->kstackpa, PTE_R | PTE_W);
+  uint64 pa=walkaddrk(p->kstack);
+  //printf("kstack%d\n",p->kstack);
+  //printf("kstackpa%d\n",p->kstackpa);
+  //printf("walkaddr%d\n",pa);
+  mappages(p->kpagetable,p->kstack, PGSIZE,pa, PTE_R | PTE_W);
+     /*          
+  char *pa = kalloc();
+  if(pa == 0)
+        panic("kalloc");
+      uint64 va = TRAMPOLINE - 2*PGSIZE;
+      mappages(p->kpagetable,va,PGSIZE,(uint64)pa, PTE_R | PTE_W);
+      p->kstack = va;
+      */
+  
+  
+  
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -141,6 +166,9 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kpagetable) 
+    kvmfree(p->kpagetable);
+  p->kpagetable = 0;
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -220,6 +248,17 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  
+  pte_t *pte,*kernelPte;
+  
+  for (int j = 0;j < p->sz;j += PGSIZE)
+  {
+  pte=walk(p->pagetable,j,0);
+  kernelPte = walk(p->kpagetable,j,1);
+  *kernelPte = (*pte) & ~PTE_U; 
+  }
+  
+  
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -261,6 +300,7 @@ fork(void)
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
+  pte_t *pte,*kernelPte;
 
   // Allocate process.
   if((np = allocproc()) == 0){
@@ -273,6 +313,14 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  
+  for (int j = 0;j < p->sz;j += PGSIZE)
+  {
+  pte=walk(np->pagetable,j,0);
+  kernelPte = walk(np->kpagetable,j,1);
+  *kernelPte = (*pte) & ~PTE_U; 
+  }
+  
   np->sz = p->sz;
 
   np->parent = p;
@@ -473,11 +521,17 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+        
         swtch(&c->context, &p->context);
+        
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+        kvminithart();
 
         found = 1;
       }
