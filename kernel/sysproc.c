@@ -53,6 +53,32 @@ sys_sbrk(void)
 }
 
 uint64
+sys_sigalarm(void)
+{
+struct proc * myProc = myproc();
+int n;
+uint64 handler;
+if (argint(0,&n)<0)
+ return -1;
+if (argaddr(1,&handler)<0)
+ return -1;
+myProc->interval = n;
+myProc->spent = 0;
+myProc->handler = (void (*)())handler;
+return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+struct proc *p = myproc();
+memmove(p->trapframe,p->saved_trapframe,sizeof(struct trapframe));
+p->allow_entrance_handler = 1;
+return 0;
+}
+
+
+uint64
 sys_sleep(void)
 {
   int n;
@@ -70,6 +96,7 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+  backtrace();
   return 0;
 }
 
