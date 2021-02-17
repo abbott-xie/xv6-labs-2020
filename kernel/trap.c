@@ -72,17 +72,14 @@ usertrap(void)
      p->spent+=1;
      if (p->spent==p->interval)
      {
-     if (p->allow_entrance_handler)
+     	p->spent = 0;
+          if (p->allow_entrance_handler)
       {
         // avoid re-entrant
         p->allow_entrance_handler = 0;
 	memmove(p->saved_trapframe,p->trapframe,sizeof(struct trapframe));
-	p->spent = 0;
 	p->trapframe->epc = (uint64)p->handler;
-     } else {
-        // can not enter handler code
-        p->spent -= 1;
-        }
+	}
     }
     }
   } else {
