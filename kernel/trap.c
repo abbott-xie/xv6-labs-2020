@@ -65,7 +65,28 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  }else if (r_scause() == 13 || r_scause() == 15)
+  {
+      uint64 va = r_stval();
+      if (va >= p->sz || va < p->trapframe->sp) {
+      p->killed = 1;
+      }
+      else{ 
+      uint64 ka = (uint64) kalloc();
+      if (ka == 0){
+        p->killed = 1;
+      }
+      else
+      {
+       memset((void *)ka, 0, PGSIZE);
+       if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)ka, PTE_W|PTE_X|PTE_R|PTE_U) != 0)
+       {
+           p->killed =1;
+       }
+      }
+     }  
+  } 
+  else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
