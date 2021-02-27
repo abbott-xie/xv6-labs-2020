@@ -120,30 +120,15 @@ e1000_transmit(struct mbuf *m) {
 }
 
 static void
-e1000_recv(void) {
-  struct mbuf *buf;
-
-  uint32 desc_pos = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
-
-  while((rx_ring[desc_pos].status & E1000_RXD_STAT_DD)) {
-    acquire(&e1000_lock);
-    buf = rx_mbufs[desc_pos];
-    mbufput(buf, rx_ring[desc_pos].length);
-
-    // refill a new mbuf
-    rx_mbufs[desc_pos] = mbufalloc(0);
-    if (!rx_mbufs[desc_pos])
-      panic("e1000");
-    rx_ring[desc_pos].addr = (uint64) rx_mbufs[desc_pos]->head;
-    rx_ring[desc_pos].status = 0;
-
-    regs[E1000_RDT] = desc_pos;
-    __sync_synchronize();
-    release(&e1000_lock);
-
-    net_rx(buf);
-
-    desc_pos = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+e1000_recv(void)
+{
+  for (;;) {
+      uint32 index = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+      if ((rx_ring[index].status & E1000_RXD_STAT_DD) == 0) break;
+      rx_mbufs[index]->len = rx_ring[index].length;
+      net_rx(rx_mbufs[index]); rx_mbufs[index] = mbufalloc(0);
+      rx_ring[index].addr = (uint64)rx_mbufs[index]->head; rx_ring[index].status = 0;
+      regs[E1000_RDT] = index;
   }
 }
 
